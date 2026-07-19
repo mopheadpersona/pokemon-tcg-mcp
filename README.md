@@ -120,3 +120,7 @@ End-to-end acceptance scenarios through a real MCP client (needs network):
 npm run build && npm run smoke            # all scenarios
 node scripts/smoke.mjs deck meta          # a subset
 ```
+
+## License
+
+[MIT](LICENSE)

@@ -2,6 +2,7 @@
   "name": "pokemon-tcg-mcp",
   "version": "0.1.0",
   "description": "MCP server exposing Pokémon TCG card data (pokemontcg.io) and competitive meta (Limitless TCG) over stdio",
+  "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
