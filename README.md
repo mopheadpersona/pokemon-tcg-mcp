@@ -22,6 +22,17 @@ card data and competitive meta information, over stdio.
 | `collection_add` | Add cards to the collection (TCG Live line format). Ambiguous bare names change nothing and list the candidate printings. |
 | `collection_remove` | Decrement/drop cards, matched against the file itself (no API). Ambiguity and over-removal are refused/clamped with notes. |
 | `build_decks` | Deterministic deck builder over your collection: evolution-line cores, starter/draw/search/switch/energy proportions, check_deck validation — and for two decks, a counter-score minimized across rebuilds. |
+| `resolve_scanned` | Turn card identifications transcribed from photos into verified printings: quantities optional, `031/084` totals infer the set, JP set codes (`m5`) and common JP names map to English, name-only lines pick the newest standard-legal printing. Outputs clean TCG Live lines. |
+| `session_save` | Journal a kitchen-table session (card lines + built decks) as a timestamped JSON file. Name collisions append `-2`. |
+| `session_list` | All saved sessions: name, date, card count, deck names. |
+| `session_load` | Reload a session's lines and decks in the formats the other tools accept. |
+
+The server also registers two **MCP prompts** for one-tap mobile flows:
+`kitchen-table` (photograph cards on the table → resolve → build 1–2 decks →
+save the session) and `table-judge` (explain what a card does from verified
+data, with a play example). The vision step — reading the photos — happens in
+the Claude client; this server only ever receives text lines and **never
+calls any LLM API**.
 
 ## Setup
 
@@ -109,6 +120,14 @@ src/
 ├── tools.ts             the 6 original MCP tools (zod-validated inputs, markdown outputs)
 ├── tools-collection.ts  collection_list / collection_add / collection_remove
 ├── tools-build.ts       build_decks (rendering + acquisition suggestions)
+├── tools-scan.ts        resolve_scanned (kitchen-table photo workflow)
+├── tools-session.ts     session_save / session_list / session_load
+├── prompts.ts           kitchen-table + table-judge MCP prompts
+├── scan.ts              parser for messy scanned card lines (pure, tested)
+├── scanresolve.ts       scanned-line resolution: EN codes, JP sets by name, /NNN totals, name-only
+├── jpsets.ts            JP→EN set-code + card-name tables (plain constants, easy to extend)
+├── session.ts           session journal records over the Storage interface (pure, tested)
+├── storage.ts           Storage interface + FsStorage (SESSIONS_DIR, default ./sessions)
 ├── deckbuilder.ts       deterministic deck engine: evolution lines, core scoring, assembly (pure, tested)
 ├── counterscore.ts      5-component weighted counter-score between two decks (pure, tested)
 ├── effects.ts           text-pattern detectors: draw/search/switch/status/denial/snipe… (pure, tested)
@@ -160,6 +179,19 @@ Collection & deck-builder flows:
   `build_decks {owned_only: false, max_proxies: 5}` — gap-filling cards are
   suggested separately with prices, never silently mixed into the list.
 
+Kitchen-table flows (the `kitchen-table` prompt walks through this):
+
+- Photograph the cards on the table → the client transcribes lines like
+  `2 Slowpoke PBL 29`, `Mega Slowbro ex 031/084`, `ヤドラン m5 029`,
+  `Jacinthe` → `resolve_scanned` verifies every printing, flags what needs a
+  retake, and emits clean Live-format lines.
+- `collection_add` the clean lines, `build_decks {deck_size: 40}` for a quick
+  game, then `session_save` so next week's session can `session_load` the
+  same pool.
+- "What does this card do?" (photo or name, JP or EN) → the `table-judge`
+  prompt: `resolve_scanned`/`get_card` for ground truth, then a plain-language
+  explanation with a play example.
+
 ## Design notes
 
 - **Standard legality is computed from regulation marks, not the API's
@@ -189,6 +221,17 @@ Collection & deck-builder flows:
   average <3 is a balanced pair, 3–6 playable, >6 rebuild recommended. The
   builder retries up to 5 times, banning the worst offenders, and keeps the
   best pair seen.
+- **Scanned-card resolution never trusts what it can't verify.** EN set code
+  + number is authoritative (a disagreeing scanned name gets a warning);
+  mapped JP sets (`m5`→`PBL`, table in `jpsets.ts`) are matched **by name**
+  because JP collector numbers don't line up with EN numbering; `031/084`
+  totals infer candidate sets from `/sets` printed totals; unmapped JP codes
+  and untranslatable JP names are reported explicitly instead of guessed.
+  Lookups are batched (one query per set code / JP code / printed total).
+- **Sessions are dumb JSON files** in `SESSIONS_DIR` (default `./sessions`),
+  one per session, written through a small `Storage` interface so another
+  backend could replace the filesystem without touching tool logic. Name
+  collisions append `-2` rather than overwriting.
 - **Caching:** in-memory LRU with TTL — cards/sets 24h, meta 1h. Identical
   concurrent requests are deduplicated.
 - **Politeness:** identifying User-Agent, 10s timeouts, a single retry with

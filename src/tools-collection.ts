@@ -183,11 +183,7 @@ export function registerCollectionTools(server: McpServer, api: TcgIoClient, res
 
         // Reverse set.id → Live code map for printings whose embedded
         // ptcgoCode is missing (a known API data gap).
-        const mapping = await resolver.mapping();
-        const codeOfSet = new Map<string, string>();
-        for (const [code, sets] of mapping) {
-          for (const s of sets) if (!codeOfSet.has(s.id)) codeOfSet.set(s.id, code);
-        }
+        const codeOfSet = await resolver.reverseMapping();
 
         for (const e of nameOnly) {
           if (looksLikeBasicEnergy(e.name)) {

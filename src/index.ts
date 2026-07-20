@@ -3,20 +3,28 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { VERSION, pokemonTcgApiKey } from "./config.js";
+import { registerPrompts } from "./prompts.js";
 import { SetResolver } from "./sets.js";
+import { FsStorage, sessionsDir } from "./storage.js";
 import { TcgIoClient } from "./tcgio.js";
 import { registerTools } from "./tools.js";
 import { registerBuildTools } from "./tools-build.js";
 import { registerCollectionTools } from "./tools-collection.js";
+import { registerScanTools } from "./tools-scan.js";
+import { registerSessionTools } from "./tools-session.js";
 
 async function main(): Promise<void> {
   const api = new TcgIoClient();
   const resolver = new SetResolver(api);
+  const storage = new FsStorage(sessionsDir());
 
   const server = new McpServer({ name: "pokemon-tcg", version: VERSION });
   registerTools(server, api, resolver);
   registerCollectionTools(server, api, resolver);
   registerBuildTools(server, api, resolver);
+  registerScanTools(server, api, resolver);
+  registerSessionTools(server, storage);
+  registerPrompts(server);
 
   // Warm the set-code mapping in the background; tools retry on demand if it fails.
   resolver.mapping().then(

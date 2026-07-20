@@ -10,7 +10,7 @@ import { z } from "zod";
 import { collectionFilePath, loadCollectionText, parseCollection } from "./collection.js";
 import { buildDecksFromCollection, guidelines, type BuiltDeck, type OwnedCard } from "./deckbuilder.js";
 import { isDrawSupporter, isSwitchCard } from "./effects.js";
-import { eurPrice, marksNote, priceString, setRef, usdPrice } from "./format.js";
+import { eurPrice, liveLine, marksNote, priceString, setRef, usdPrice } from "./format.js";
 import { currentLegalMarks, isStandardLegal } from "./legality.js";
 import { standardClause, textContainsClause } from "./qbuilder.js";
 import { resolveEntries, type Resolution } from "./resolve.js";
@@ -20,12 +20,14 @@ import { guard, textResult } from "./toolutil.js";
 import type { Card } from "./types.js";
 import { deckProblems } from "./validate.js";
 
-function liveLine(card: Card, count: number): string {
-  const code = card.set.ptcgoCode ?? card.set.id.toUpperCase();
-  return `${count} ${card.name} ${code} ${card.number}`;
-}
-
-function renderDeck(deck: BuiltDeck, index: number, deckSize: 40 | 60, marks: string[], format: string): string[] {
+function renderDeck(
+  deck: BuiltDeck,
+  index: number,
+  deckSize: 40 | 60,
+  marks: string[],
+  format: string,
+  codeOf: (setId: string) => string | undefined,
+): string[] {
   const lines: string[] = [`### Deck ${index} — ${deck.coreLines[0].topAttacker.name} (${deck.total} cards)`];
 
   const groups: [string, typeof deck.cards][] = (["Pokémon", "Trainer", "Energy"] as const).map((supertype) => [
@@ -36,7 +38,7 @@ function renderDeck(deck: BuiltDeck, index: number, deckSize: 40 | 60, marks: st
   for (const [supertype, cards] of groups) {
     if (cards.length === 0) continue;
     list.push(`${supertype}: ${cards.reduce((s, c) => s + c.count, 0)}`);
-    list.push(...cards.map((c) => liveLine(c.card, c.count)));
+    list.push(...cards.map((c) => liveLine(c.card, c.count, codeOf)));
     list.push("");
   }
   list.push(`Total Cards: ${deck.total}`);
@@ -55,7 +57,7 @@ function renderDeck(deck: BuiltDeck, index: number, deckSize: 40 | 60, marks: st
 
   // Validate through the shared check_deck rules before returning.
   const resolutions: Resolution[] = deck.cards.map((c) => ({
-    entry: { count: c.count, name: c.card.name, line: 0, raw: liveLine(c.card, c.count) },
+    entry: { count: c.count, name: c.card.name, line: 0, raw: liveLine(c.card, c.count, codeOf) },
     card: c.card,
     notes: [],
   }));
@@ -197,8 +199,10 @@ export function registerBuildTools(server: McpServer, api: TcgIoClient, resolver
           return textResult(lines.join("\n"), true);
         }
 
+        const reverse = await resolver.reverseMapping();
+        const codeOf = (setId: string): string | undefined => reverse.get(setId);
         for (const [i, deck] of result.decks.entries()) {
-          lines.push(...renderDeck(deck, i + 1, args.deck_size as 40 | 60, marks, args.format));
+          lines.push(...renderDeck(deck, i + 1, args.deck_size as 40 | 60, marks, args.format, codeOf));
           if (!args.owned_only) {
             const suggestions = await suggestAcquisitions(deck, args.deck_size as 40 | 60, marks, args.max_proxies, api);
             if (suggestions.length > 0) {

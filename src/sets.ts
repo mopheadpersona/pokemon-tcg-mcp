@@ -36,4 +36,16 @@ export class SetResolver {
   async lookup(code: string): Promise<SetInfo[]> {
     return (await this.mapping()).get(code.toUpperCase()) ?? [];
   }
+
+  /**
+   * Reverse lookup set.id → Live code (first code wins), for printings whose
+   * embedded ptcgoCode is missing (a known API data gap for PAL, SVE, …).
+   */
+  async reverseMapping(): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    for (const [code, sets] of await this.mapping()) {
+      for (const s of sets) if (!map.has(s.id)) map.set(s.id, code);
+    }
+    return map;
+  }
 }

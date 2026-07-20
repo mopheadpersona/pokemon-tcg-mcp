@@ -66,6 +66,11 @@ if (!process.env.POKEMON_COLLECTION_PATH) {
   process.env.POKEMON_COLLECTION_PATH = path;
   console.error(`[smoke] fixture collection at ${path}`);
 }
+// Session scenarios write JSON files — keep them out of the repo's ./sessions.
+if (!process.env.SESSIONS_DIR) {
+  process.env.SESSIONS_DIR = join(mkdtempSync(join(tmpdir(), "ptcg-smoke-")), "sessions");
+  console.error(`[smoke] fixture sessions dir at ${process.env.SESSIONS_DIR}`);
+}
 
 const SCENARIOS = {
   search: ["search_cards", { query: "jacinthe" }],
@@ -81,6 +86,18 @@ const SCENARIOS = {
   collremove: ["collection_remove", { lines: "1 Slowpoke PBL 29" }],
   build: ["build_decks", { deck_count: 1 }],
   build2: ["build_decks", { deck_count: 2 }],
+  // Acceptance check 1: messy scanned lines — EN code, slash total, JP, name-only.
+  resolve: ["resolve_scanned", { lines: ["2 Slowpoke PBL 29", "Slowbro 030/084", "ヤドラン m5 029", "Jacinthe"] }],
+  sessionsave: [
+    "session_save",
+    {
+      name: "smoke-session",
+      lines: ["2 Slowpoke PBL 29", "1 Slowbro PBL 30"],
+      decks: [{ name: "Slowbro pile", decklist: "Pokémon: 3\n2 Slowpoke PBL 29\n1 Slowbro PBL 30\n\nTotal Cards: 3" }],
+    },
+  ],
+  sessionlist: ["session_list", {}],
+  sessionload: ["session_load", { name: "smoke-session" }],
 };
 
 const picked = process.argv.slice(2);
@@ -96,7 +113,18 @@ const client = new Client({ name: "smoke", version: "0.0.0" });
 await client.connect(transport);
 
 let failed = false;
+
+// Acceptance check 3: the prompts/list handshake must expose both kitchen-table prompts.
+if (picked.length === 0 || picked.includes("prompts")) {
+  const { prompts } = await client.listPrompts();
+  const names = prompts.map((p) => p.name).sort();
+  const ok = names.includes("kitchen-table") && names.includes("table-judge");
+  console.log(`\n${"=".repeat(20)} prompts: prompts/list → [${names.join(", ")}] ${ok ? "" : "[MISSING PROMPTS]"}`);
+  if (!ok) failed = true;
+}
+
 for (const key of toRun) {
+  if (key === "prompts") continue;
   const scenario = SCENARIOS[key];
   if (!scenario) {
     console.log(`unknown scenario: ${key} (have: ${Object.keys(SCENARIOS).join(", ")})`);

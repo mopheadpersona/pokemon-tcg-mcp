@@ -78,6 +78,28 @@ export function setRef(card: Card): string {
   return `${card.set.name}${code} ${card.number}`;
 }
 
+/**
+ * TCG Live decklist line for a printing, e.g. "4 Slowpoke PBL 29". The set
+ * object embedded in card documents is missing ptcgoCode for several sets
+ * (PAL, SVE, …), so callers should pass `codeOf` (a set.id → Live code lookup
+ * built from the /sets mapping) — the uppercased set id is a last resort.
+ */
+export function liveLine(card: Card, count: number, codeOf?: (setId: string) => string | undefined): string {
+  const code = card.set.ptcgoCode ?? codeOf?.(card.set.id) ?? card.set.id.toUpperCase();
+  return `${count} ${card.name} ${code} ${card.number}`;
+}
+
+/** Single-line gist of what a card does, for table cells. */
+export function oneLineText(card: Card, max = 120): string {
+  const first =
+    card.abilities?.[0]?.text ??
+    (card.attacks ?? []).map((a) => [a.name, a.damage, a.text].filter(Boolean).join(" ")).find(Boolean) ??
+    (card.rules ?? []).find((r) => !/^you may play (only 1|any number)/i.test(r));
+  if (!first) return card.supertype === "Energy" ? "provides Energy" : "—";
+  const prefix = card.abilities?.[0] ? `${card.abilities[0].name}: ` : "";
+  return truncate(`${prefix}${first}`, max);
+}
+
 function attackLine(attack: Attack): string {
   const damage = attack.damage ? ` ${attack.damage}` : "";
   const text = attack.text ? `: ${truncate(attack.text, 180)}` : "";
