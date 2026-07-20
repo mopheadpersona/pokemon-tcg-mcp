@@ -127,6 +127,11 @@ export function normalizeName(name: string): string {
   return name.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+/** Normalize a card number for matching: uppercase, strip leading zeros ("029" ≡ "29", "gg44" ≡ "GG44"). */
+export function normNum(num: string): string {
+  return num.toUpperCase().replace(/^0+(?=\d)/, "");
+}
+
 /** Aggregate copy counts by card name across printings ("4 Iono PAL 185" + "1 Iono PAF 80" → 5). */
 export function countByName(entries: DeckEntry[]): Map<string, number> {
   const counts = new Map<string, number>();

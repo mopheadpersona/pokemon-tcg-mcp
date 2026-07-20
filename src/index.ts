@@ -6,6 +6,8 @@ import { VERSION, pokemonTcgApiKey } from "./config.js";
 import { SetResolver } from "./sets.js";
 import { TcgIoClient } from "./tcgio.js";
 import { registerTools } from "./tools.js";
+import { registerBuildTools } from "./tools-build.js";
+import { registerCollectionTools } from "./tools-collection.js";
 
 async function main(): Promise<void> {
   const api = new TcgIoClient();
@@ -13,6 +15,8 @@ async function main(): Promise<void> {
 
   const server = new McpServer({ name: "pokemon-tcg", version: VERSION });
   registerTools(server, api, resolver);
+  registerCollectionTools(server, api, resolver);
+  registerBuildTools(server, api, resolver);
 
   // Warm the set-code mapping in the background; tools retry on demand if it fails.
   resolver.mapping().then(

@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { countByName, looksLikeBasicEnergy, normalizeName, parseDecklist, type DeckEntry } from "./deck.js";
+import { normalizeName, parseDecklist } from "./deck.js";
 import {
   compactCardBlock,
   costString,
@@ -9,59 +9,26 @@ import {
   fmtEur,
   fmtUsd,
   fullCardText,
+  marksNote,
   priceString,
   setRef,
-  truncate,
   usdPrice,
 } from "./format.js";
-import { currentLegalMarks, isAceSpec, isBasicEnergy, isStandardLegal, standardBadge } from "./legality.js";
+import { currentLegalMarks, isStandardLegal, standardBadge } from "./legality.js";
 import { fetchMetaSnapshot } from "./limitless.js";
 import { buildEffectQuery, buildQuery, extractKeywords, quoteValue, standardClause } from "./qbuilder.js";
+import { resolveEntries } from "./resolve.js";
 import type { SetResolver } from "./sets.js";
 import type { SearchResult, TcgIoClient } from "./tcgio.js";
+import { guard, textResult } from "./toolutil.js";
 import type { Card } from "./types.js";
-
-type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
-
-function textResult(text: string, isError = false): ToolResult {
-  return { content: [{ type: "text", text }], isError };
-}
-
-async function guard(fn: () => Promise<ToolResult>): Promise<ToolResult> {
-  try {
-    return await fn();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return textResult(`Tool failed: ${message}`, true);
-  }
-}
-
-function normNum(num: string): string {
-  return num.toUpperCase().replace(/^0+(?=\d)/, "");
-}
-
-async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor++;
-      results[index] = await fn(items[index]);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
+import { deckProblems } from "./validate.js";
 
 function truncationNote(res: SearchResult): string | undefined {
   if (res.totalCount > res.cards.length) {
     return `_Note: ${res.totalCount} total matches on the server; only the first ${res.cards.length} were fetched — narrow the query for full coverage._`;
   }
   return undefined;
-}
-
-function marksNote(marks: string[]): string {
-  return `_Standard legality computed from regulation marks (currently legal: ${marks.join(", ")}; basic energy always legal) — the API's own legality flags lag behind rotation._`;
 }
 
 const SUPERTYPE_INPUT = z.enum(["pokemon", "trainer", "energy"]);
@@ -306,107 +273,8 @@ export function registerTools(server: McpServer, api: TcgIoClient, resolver: Set
           return textResult("No card lines recognized. Expected TCG Live export lines like `4 Slowpoke PBL 29`.", true);
         }
         const marks = currentLegalMarks();
-
-        interface Resolution {
-          entry: DeckEntry;
-          card?: Card;
-          resolvedVia?: string;
-          notes: string[];
-        }
-        const resolutions: Resolution[] = parsed.entries.map((entry) => ({ entry, notes: [] }));
-
-        const mapping = await resolver.mapping();
-        const byCode = new Map<string, Resolution[]>();
-        const nameFallback: Resolution[] = [];
-        for (const r of resolutions) {
-          if (r.entry.setCode && r.entry.number) {
-            if (mapping.has(r.entry.setCode)) {
-              const group = byCode.get(r.entry.setCode) ?? [];
-              group.push(r);
-              byCode.set(r.entry.setCode, group);
-            } else {
-              r.notes.push(`unknown set code ${r.entry.setCode} — resolved by name instead`);
-              nameFallback.push(r);
-            }
-          } else {
-            nameFallback.push(r);
-          }
-        }
-
-        // One query per set code, ORing all needed card numbers. Query by
-        // set.id from our mapping table — the set objects embedded in card
-        // documents are missing ptcgoCode for several sets, so
-        // `set.ptcgoCode:` misses cards that `set.id:` finds.
-        await mapLimited([...byCode.entries()], 4, async ([code, group]) => {
-          const sets = mapping.get(code)!;
-          const setClause =
-            sets.length === 1 ? `set.id:${sets[0].id}` : `(${sets.map((s) => `set.id:${s.id}`).join(" OR ")})`;
-          const numbers = [...new Set(group.map((r) => r.entry.number!))];
-          const q = `${setClause} (${numbers.map((n) => `number:${n}`).join(" OR ")})`;
-          const res = await api.searchCards(q);
-          const found = new Map(res.cards.map((c) => [normNum(c.number), c]));
-          for (const r of group) {
-            const card = found.get(normNum(r.entry.number!));
-            if (card) {
-              r.card = card;
-              r.resolvedVia = `${code} ${r.entry.number} → \`${card.id}\``;
-            } else {
-              r.notes.push(`${code} ${r.entry.number} not found — fell back to name lookup`);
-              nameFallback.push(r);
-            }
-          }
-        });
-
-        await mapLimited(nameFallback, 4, async (r) => {
-          const res = await api.searchCards(`name:${quoteValue(r.entry.name)}`, {
-            orderBy: "-set.releaseDate",
-            pageSize: 60,
-          });
-          const exact = res.cards.filter((c) => normalizeName(c.name) === normalizeName(r.entry.name));
-          const pool = exact.length > 0 ? exact : res.cards;
-          const card = pool.find((c) => isStandardLegal(c, marks)) ?? pool[0];
-          if (card) {
-            r.card = card;
-            r.resolvedVia = `by name → \`${card.id}\``;
-            if (exact.length === 0) r.notes.push(`no exact name match — using closest: "${card.name}"`);
-          }
-        });
-
-        const problems: string[] = [];
-        if (parsed.totalCards !== 60) {
-          problems.push(`Deck has **${parsed.totalCards}** cards — a standard deck must have exactly 60.`);
-        }
-
-        const isEnergyRes = (r: Resolution) =>
-          r.card ? isBasicEnergy(r.card) : looksLikeBasicEnergy(r.entry.name);
-        const countedEntries = resolutions.filter((r) => !isEnergyRes(r)).map((r) => r.entry);
-        for (const [name, count] of countByName(countedEntries)) {
-          if (count > 4) {
-            problems.push(`**${count}× “${name}”** — max 4 copies of a card with the same name (basic energy exempt).`);
-          }
-        }
-
-        const aceSpecs = resolutions.filter((r) => r.card && isAceSpec(r.card));
-        const aceSpecCount = aceSpecs.reduce((sum, r) => sum + r.entry.count, 0);
-        if (aceSpecCount > 1) {
-          problems.push(
-            `**${aceSpecCount} ACE SPEC cards** (${aceSpecs.map((r) => r.entry.name).join(", ")}) — only 1 ACE SPEC allowed per deck.`,
-          );
-        }
-
-        for (const r of resolutions) {
-          if (r.card && !isStandardLegal(r.card, marks)) {
-            const reason = r.card.regulationMark
-              ? `regulation mark ${r.card.regulationMark} is rotated (legal: ${marks.join(", ")})`
-              : "no regulation mark";
-            problems.push(`**“${r.entry.name}”** (${setRef(r.card)}) is not standard-legal — ${reason}.`);
-          }
-          if (!r.card) {
-            problems.push(
-              `Could not resolve **“${r.entry.name}”** (line ${r.entry.line}) — legality and price unchecked.`,
-            );
-          }
-        }
+        const resolutions = await resolveEntries(parsed.entries, api, resolver, marks);
+        const problems = deckProblems(resolutions, parsed.totalCards, { deckSize: 60, marks });
 
         let totalEur = 0;
         let pricedCards = 0;

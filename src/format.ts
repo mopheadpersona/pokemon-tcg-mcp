@@ -1,6 +1,10 @@
 import { standardBadge } from "./legality.js";
 import type { Attack, Card } from "./types.js";
 
+export function marksNote(marks: string[]): string {
+  return `_Standard legality computed from regulation marks (currently legal: ${marks.join(", ")}; basic energy always legal) — the API's own legality flags lag behind rotation._`;
+}
+
 export function truncate(text: string, max = 220): string {
   const clean = text.replace(/\s+/g, " ").trim();
   if (clean.length <= max) return clean;
